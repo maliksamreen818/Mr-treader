@@ -1,0 +1,8 @@
+streamlit==1.32.0
+langchain==0.1.11
+langchain-openai==0.0.8
+chromadb==0.4.24
+pypdf==4.1.0
+pandas==2.2.1
+requests==2.31.0
+python-dotenv==1.0.1
