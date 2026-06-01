@@ -1,108 +1,85 @@
 import streamlit as st
 import os
+import asyncio
 import traceback
-import requests
 from dotenv import load_dotenv
 from ai_agents import ProfitableTraderAgent, DoctorSystemAgent
+from metaapi_cloud_sdk import MetaApi
 
-# Initialize configurations
 load_dotenv()
-st.set_page_config(page_title="AI Trading Console", layout="centered", initial_sidebar_state="collapsed")
+st.set_page_config(page_title="Multi-Timeframe AI Engine", layout="centered")
 
-# Session State Persistence Engines
 if "trader" not in st.session_state:
     st.session_state.trader = ProfitableTraderAgent(account_balance=10000, risk_pct=0.01)
 if "doctor" not in st.session_state:
     st.session_state.doctor = DoctorSystemAgent()
 if "system_logs" not in st.session_state:
-    st.session_state.system_logs = ["🔄 System Online. 24/7 Cloud Guardian active."]
-if "doctor_reports" not in st.session_state:
-    st.session_state.doctor_reports = []
+    st.session_state.system_logs = ["🔄 Live 24/7 scanning matrix activated."]
 
-st.title("📱 AI Mobile Trader Console")
-st.caption("Active Cloud Execution Interface — Synchronized with Android MT5")
+st.title("📱 Multi-Timeframe AI Sniper Engine")
 
-# --- KNOWLEDGE PROCESSING PANEL ---
-st.write("---")
-st.markdown("### 📥 Strategy Document Ingestion")
-uploaded_pdf = st.file_uploader("Upload Strategy Handbook (PDF)", type=["pdf"])
+st.markdown("### ⚙️ Automation Matrix Controls")
+symbol_to_scan = st.text_input("Target Trading Pair Symbol", value="EURUSD").upper()
+target_rrr = st.slider("Minimum Macro RRR Filter (1:X)", min_value=2.0, max_value=12.0, value=6.0, step=0.5)
 
+uploaded_pdf = st.file_uploader("Upload Strategy Rules (Optional PDF)", type=["pdf"])
 if uploaded_pdf:
-    with st.spinner("Processing document embeddings..."):
-        temp_path = f"temp_{uploaded_pdf.name}"
-        with open(temp_path, "wb") as f:
-            f.write(uploaded_pdf.getbuffer())
+    with open(f"temp_{uploaded_pdf.name}", "wb") as f:
+        f.write(uploaded_pdf.getbuffer())
+    msg = st.session_state.trader.absorb_pdf_strategy(f"temp_{uploaded_pdf.name}")
+    st.success(msg)
+    os.remove(f"temp_{uploaded_pdf.name}")
+
+if st.button("🔍 Execute Automated Multi-Timeframe Scan Live", use_container_width=True):
+    async def fetch_and_scan_market():
+        api = MetaApi(token=os.getenv("BROKER_GATEWAY_TOKEN"))
+        account = await api.metatrader_account_api.get_account(account_id=os.getenv("BROKER_ACCOUNT_ID"))
+        connection = account.get_rpc_connection()
+        await connection.connect()
+        await connection.wait_synchronized()
         
-        try:
-            msg = st.session_state.trader.absorb_pdf_strategy(temp_path)
-            st.success(msg)
-            st.session_state.system_logs.append(f"Successfully processed PDF: {uploaded_pdf.name}")
-            os.remove(temp_path)
-        except Exception as e:
-            st.error(f"Failed to parse document format: {e}")
-
-# --- LIVE SIGNAL METRICS SCANNER ---
-st.write("---")
-st.markdown("### 📊 Live 15m Signal Validation")
-
-# Mock incoming technical variables intercepted by the tracking loop
-mock_signal = {
-    "symbol": "EURUSD", "entry": 1.08200, "sl": 1.08050, "tp": 1.08600,
-    "trend_4h": True, "sr_zone": True, "candle_trigger": True, "pdf_indicator": True, "clean_runway": False
-}
-
-col1, col2, col3 = st.columns(3)
-col1.metric("Asset Target", mock_signal["symbol"])
-col2.metric("Target RRR", "1:2.67")
-col3.metric("Baseline Risk", f"{st.session_state.trader.risk_pct * 100}%")
-
-# Interactive Parameters Modifiers
-balance_input = st.number_input("Account Equity Base ($)", value=st.session_state.trader.balance)
-st.session_state.trader.balance = balance_input
-
-# Evaluation Run Process Execution
-try:
-    decision = st.session_state.trader.evaluate_15m_setup(mock_signal["symbol"], mock_signal)
-    
-    if decision and decision.get("status") == "APPROVED":
-        st.info(f"✅ **Verified Trade Setup:** BUY {decision['symbol']} | Position Volume: **{decision['lots']} Lots**")
-        st.markdown(f"**Parameters Matrix:** Entry: {decision['entry']} | Safety Stop: {decision['sl']} | Target: {decision['tp']}")
+        results = []
+        # Define structural scan map across separate market windows
+        scan_matrix = [("M5", "Scalping Track"), ("H1", "Short-Term Track"), ("D1", "Long-Term Swing Track")]
         
-        if st.button("🚀 Authorize Orders to Android MT5 Server", use_container_width=True):
-            # Route payload out to MT5 Rest Web Gateway API
-            payload = {
-                "action": "BUY", "symbol": decision["symbol"], "volume": decision["lots"],
-                "stopLoss": decision["sl"], "takeProfit": decision["tp"]
-            }
-            gateway_url = os.getenv("BROKER_GATEWAY_URL", "")
-            account_id = os.getenv("BROKER_ACCOUNT_ID", "")
-            token = os.getenv("BROKER_GATEWAY_TOKEN", "")
+        for tf, track_name in scan_matrix:
+            # Live technical fetch from IC Markets data center
+            candles = await connection.get_candles(symbol_to_scan, tf, 25)
+            if candles:
+                decision = st.session_state.trader.automatic_market_scanner(symbol_to_scan, tf, candles, min_rrr=target_rrr)
+                decision["track"] = track_name
+                results.append(decision)
+        return results, connection
+
+    try:
+        with st.spinner("Analyzing multi-timeframe charts live via API..."):
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            scan_results, active_connection = loop.run_until_complete(fetch_and_scan_market())
             
-            headers = {"auth-token": token, "Content-Type": "application/json"}
-            
-            try:
-                # Simulating external REST post to the cloud router
-                st.success("✨ Order routed to Cloud Gateway successfully! Check your Android MT5 App app.")
-                st.session_state.system_logs.append(f"Executed BUY {decision['lots']} {decision['symbol']} at {decision['entry']}")
-            except Exception as net_err:
-                st.error("Gateway connectivity dropped.")
-    else:
-        st.error(f"❌ Setup Rejected by Guardrail Engine: {decision['reason']}")
+            for res in scan_results:
+                st.markdown(f"#### 🛰️ {res['track']} ({res.get('timeframe', 'N/A')})")
+                if res["status"] == "APPROVED":
+                    st.success(f"🎯 **Setup Found! {res['direction']} {res['symbol']}**")
+                    st.write(f"Parameters: Entry: {res['entry']} | SL: {res['sl']} | TP: {res['tp']} | RRR: 1:{res['rrr']}")
+                    
+                    # One-tap mobile execution confirmation
+                    if st.button(f"Deploy {res['style']} Order to Live MT5 Terminal", key=f"btn_{res['timeframe']}"):
+                        async def deploy_trade():
+                            if res['direction'] == "BUY":
+                                return await active_connection.create_market_buy_order(res['symbol'], res['lots'], res['sl'], res['tp'])
+                            else:
+                                return await active_connection.create_market_sell_order(res['symbol'], res['lots'], res['sl'], res['tp'])
+                        
+                        loop.run_until_complete(deploy_trade())
+                        st.balloons()
+                        st.session_state.system_logs.append(f"Deployed {res['style']} {res['direction']} {res['lots']} lots.")
+                else:
+                    st.warning(f"Skipped: {res['reason']}")
+                    
+    except Exception as err:
+        st.error(f"Scanner halted: {err}")
+        remediation = st.session_state.doctor.diagnose_and_heal(traceback.format_exc(), "Live API stream crash handler.")
+        st.text_area("Doctor Remediation Patch Advice", value=remediation)
 
-except Exception as fatal_error:
-    # Trigger self-healing if a code execution error occurs
-    err_trace = traceback.format_exc()
-    broken_block = "decision = st.session_state.trader.evaluate_15m_setup(mock_signal['symbol'], mock_signal)"
-    
-    patch_report = st.session_state.doctor.diagnose_and_heal(err_trace, broken_block)
-    st.session_state.doctor_reports.append(patch_report)
-    st.session_state.system_logs.append("⚠️ Critical system error handled and patched by Doctor Agent.")
-
-# --- DIAGNOSTIC AND WORKLOG PANELS ---
-st.write("---")
-st.markdown("### 🪵 Live Console Stream & Diagnostics")
-st.text_area("Activity History", value="\n".join(st.session_state.system_logs[::-1]), height=150)
-
-if st.session_state.doctor_reports:
-    st.markdown("### 🩺 Doctor Patch Interventions")
-    st.text_area("Latest Assimilation & Patch Report", value=st.session_state.doctor_reports[-1], height=200)
+st.text_area("Live Event Stream Log", value="\n".join(st.session_state.system_logs[::-1]))
