@@ -13,57 +13,107 @@ class ProfitableTraderAgent:
         self.vector_db = None
 
     def absorb_pdf_strategy(self, file_path):
-        """Ingests user PDFs, maps knowledge tokens, and extracts key metrics."""
         loader = PyPDFLoader(file_path)
         pages = loader.load_and_split()
         embeddings = OpenAIEmbeddings()
         self.vector_db = Chroma.from_documents(pages, embeddings)
-        return f"Assimilated strategy parameters from: {os.path.basename(file_path)}"
+        return f"📚 Knowledge Base Loaded: {os.path.basename(file_path)}"
 
-    def evaluate_15m_setup(self, symbol, matrix_data):
-        """Enforces 5-Point Confluence Checks and strict 1:2 RRR verification."""
-        entry = float(matrix_data['entry'])
-        sl = float(matrix_data['sl'])
-        tp = float(matrix_data['tp'])
-
-        # Risk-to-Reward Ratio Validation
-        risk_dist = abs(entry - sl)
-        reward_dist = abs(tp - entry)
+    def calculate_technical_indicators(self, candles):
+        """
+        Processes raw candle data mathematically to derive key technical states.
+        """
+        closes = [float(c['close']) for c in candles]
+        highs = [float(c['high']) for c in candles]
+        lows = [float(c['low']) for c in candles]
         
-        if risk_dist == 0:
-            raise ZeroDivisionError("Structural Invalidity: Entry price cannot match Stop Loss level.")
+        if len(closes) < 20:
+            return {"trend": "NEUTRAL", "momentum": 50, "volatility": "LOW"}
             
-        rrr = reward_dist / risk_dist
-        if rrr < 2.0:
-            return {"status": "REJECTED", "reason": f"Insufficient Risk-Reward Ratio (1:{round(rrr, 2)}). Must be >= 1:2."}
+        # Fast Moving Average (8-period) vs Slow Moving Average (20-period)
+        ma_fast = sum(closes[-8:]) / 8
+        ma_slow = sum(closes[-20:]) / 20
+        trend = "BULLISH" if ma_fast > ma_slow else "BEARISH"
+        
+        # Simple Momentum Calculation (RSI approximation)
+        gains = []
+        losses = []
+        for i in range(1, len(closes[-14:])):
+            diff = closes[-14:][i] - closes[-14:][i-1]
+            if diff > 0:
+                gains.append(diff)
+            else:
+                losses.append(abs(diff))
+        
+        avg_gain = sum(gains)/14 if gains else 0
+        avg_loss = sum(losses)/14 if losses else 0
+        rs = avg_gain / avg_loss if avg_loss != 0 else 1
+        rsi = 100 - (100 / (1 + rs))
+        
+        return {"trend": trend, "rsi": rsi, "current_price": closes[-1]}
 
-        # Calculate Lot Size based on precise risk parameters
+    def automatic_market_scanner(self, symbol, timeframe, candles, min_rrr=6.0):
+        """
+        Scans current market conditions across multiple timeframes automatically.
+        Calculates exact Entry, Stop Loss, and Take Profit based on trade classifications.
+        """
+        tech = self.calculate_technical_indicators(candles)
+        current_price = tech["current_price"]
+        
+        # Define trade categories based on timeframe input
+        if timeframe in ["M1", "M5"]:
+            style = "SCALPING"
+            sl_pips = 0.00050  # Tight 5 pip stop loss
+            target_rrr = 2.5   # Scalping uses higher frequency, lower RRR targets
+        elif timeframe in ["M15", "H1"]:
+            style = "SHORT-TERM"
+            sl_pips = 0.00150  # 15 pip day trading stop
+            target_rrr = max(4.0, min_rrr)
+        else:
+            style = "LONG-TERM"
+            sl_pips = 0.00400  # 40 pip macro swing trade stop
+            target_rrr = max(6.0, min_rrr)
+
+        # Apply technical logic based on detected trend
+        if tech["trend"] == "BULLISH" and tech["rsi"] < 65:
+            direction = "BUY"
+            entry = current_price
+            sl = entry - sl_pips
+            tp = entry + (sl_pips * target_rrr)
+        elif tech["trend"] == "BEARISH" and tech["rsi"] > 35:
+            direction = "SELL"
+            entry = current_price
+            sl = entry + sl_pips
+            tp = entry - (sl_pips * target_rrr)
+        else:
+            return {"status": "SKIPPED", "reason": f"Market consolidations on {timeframe}. Indicators flat."}
+
+        # Cross-reference with your uploaded strategy PDF manual if available
+        if self.vector_db:
+            context = self.vector_db.similarity_search(f"Validate a {direction} setup on {timeframe} trend conditions", k=2)
+            # AI reads the document context silently to approve or alter targets
+            ai_opinion = self.llm.predict(f"Based on strategy text: {context}\nIs a {direction} order at {entry} structurally sound? Reply 'VALID' or 'INVALID'")
+            if "INVALID" in ai_opinion:
+                return {"status": "SKIPPED", "reason": "Filtered by custom PDF strategy rules."}
+
+        # Math logic to calculate proper safety lot sizing
+        risk_dist = abs(entry - sl)
         risk_capital = self.balance * self.risk_pct
-        pips_at_risk = risk_dist * 10000  # Multiplier calibrated for major currency pairs
-        pip_value_constant = 10.0
-        calculated_lots = round(risk_capital / (pips_at_risk * pip_value_constant), 2)
+        pips_at_risk = risk_dist * 10000
+        calculated_lots = round(risk_capital / (pips_at_risk * 10.0), 2)
         lots = max(0.01, calculated_lots)
-
-        # Enforce Confluence Checklist Scoring Engine
-        score = sum([
-            matrix_data.get('trend_4h', False),
-            matrix_data.get('sr_zone', False),
-            matrix_data.get('candle_trigger', False),
-            matrix_data.get('pdf_indicator', False),
-            matrix_data.get('clean_runway', False)
-        ])
-
-        if score < 4:
-            return {"status": "REJECTED", "reason": f"Low Confluence Score ({score}/5). Minimum 4/5 required."}
 
         return {
             "status": "APPROVED",
+            "style": style,
+            "direction": direction,
             "symbol": symbol,
+            "timeframe": timeframe,
             "lots": lots,
-            "entry": entry,
-            "sl": sl,
-            "tp": tp,
-            "score": f"{score}/5"
+            "entry": round(entry, 5),
+            "sl": round(sl, 5),
+            "tp": round(tp, 5),
+            "rrr": target_rrr
         }
 
 class DoctorSystemAgent:
@@ -71,19 +121,5 @@ class DoctorSystemAgent:
         self.diagnostic_brain = ChatOpenAI(model="gpt-4o", temperature=0.1)
 
     def diagnose_and_heal(self, stack_trace, broken_logic_block):
-        """Intercepts system crashes, optimizes error context, and generates software patches."""
-        prompt = f"""
-        You are the system Doctor Agent running inside a 24/7 trading cluster.
-        A sub-module crash was encountered. Analyze the parameters below to determine the cause:
-        
-        [STACK TRACE ERROR]
-        {stack_trace}
-        
-        [CRITICAL CODE SEGMENT]
-        {broken_logic_block}
-        
-        Generate a concise 'KNOWLEDGE ASSIMILATION & PATCH REPORT'.
-        State the operational cause of the failure, confirm how the logic is now adapted, 
-        and provide an explicit structural rule to overwrite the error and preserve runtime uptime.
-        """
+        prompt = f"System Error occurred inside multi-timeframe engine.\nTrace: {stack_trace}\nContext: {broken_logic_block}"
         return self.diagnostic_brain.predict(prompt)
